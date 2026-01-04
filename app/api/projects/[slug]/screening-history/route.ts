@@ -101,7 +101,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       : null;
   const candidateCount = sanitizeCount(payload?.candidateCount);
   const resultCount = sanitizeCount(payload?.resultCount);
-  const results = sanitizeScreeningResults(payload?.results);
+  const results = sanitizeScreeningResults(payload?.results) ?? [];
 
   const entry = await prisma.screeningHistory.create({
     data: {
