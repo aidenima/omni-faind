@@ -303,17 +303,25 @@ export const authOptions: NextAuthConfig = {
     },
   },
   events: {
-    async signOut({ token }) {
+    async signOut(message) {
+      const token =
+        message && typeof message === "object" && "token" in message
+          ? (message as { token?: unknown }).token
+          : undefined;
+      const deviceSessionToken =
+        token && typeof (token as any).deviceSessionToken === "string"
+          ? (token as any).deviceSessionToken
+          : undefined;
       const isEdge =
         typeof EdgeRuntime !== "undefined" ||
         (typeof process !== "undefined" &&
           process.env.NEXT_RUNTIME === "edge");
-      if (!isEdge && token?.deviceSessionToken) {
+      if (!isEdge && deviceSessionToken) {
         try {
           const { revokeSessionByToken } = await import(
             "@/lib/auth/session-service"
           );
-          await revokeSessionByToken(token.deviceSessionToken as string);
+          await revokeSessionByToken(deviceSessionToken);
         } catch (error) {
           console.error("[auth] Failed to revoke user session", error);
         }
