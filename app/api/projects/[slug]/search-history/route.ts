@@ -112,7 +112,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
   const queries = sanitizeQueries(payload?.queries);
   const resultCount = sanitizeResultCount(payload?.resultCount);
-  const results = sanitizeHistoryResults(payload?.results);
+  const results = sanitizeHistoryResults(payload?.results) ?? [];
 
   const entry = await prisma.searchHistory.create({
     data: {
