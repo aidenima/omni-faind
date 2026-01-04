@@ -229,8 +229,10 @@ export const authOptions: NextAuthConfig = {
         session.user.id = token.id as string;
         session.user.name = token.name ?? session.user.name ?? undefined;
         session.user.email = token.email ?? session.user.email ?? "";
-        session.user.subscriptionPlan =
-          (token.subscriptionPlan as string) ?? DEFAULT_SUBSCRIPTION_PLAN;
+        const normalizedPlan =
+          normalizeSubscriptionPlan(token.subscriptionPlan) ??
+          DEFAULT_SUBSCRIPTION_PLAN;
+        session.user.subscriptionPlan = normalizedPlan;
         session.user.creditsRemaining =
           typeof token.creditsRemaining === "number"
             ? token.creditsRemaining
