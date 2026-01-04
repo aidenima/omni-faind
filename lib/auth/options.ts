@@ -45,19 +45,21 @@ export const authOptions: NextAuthConfig = {
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        if (!credentials?.email || !credentials.password) {
+        const email =
+          typeof credentials?.email === "string" ? credentials.email : "";
+        const password =
+          typeof credentials?.password === "string" ? credentials.password : "";
+
+        if (!email || !password) {
           return null;
         }
 
-        const user = await findUserByEmail(credentials.email);
+        const user = await findUserByEmail(email);
         if (!user || !user.passwordHash) {
           return null;
         }
 
-        const isValidPassword = await compare(
-          credentials.password,
-          user.passwordHash
-        );
+        const isValidPassword = await compare(password, user.passwordHash);
 
         if (!isValidPassword) {
           return null;
