@@ -434,7 +434,10 @@ export default function HomePage() {
   const [billingCycle, setBillingCycle] = useState<"monthly" | "yearly">(
     "monthly"
   );
-  const copy: HomeCopy = { ...translations.en, ...translations[language] };
+  const copy: HomeCopy = {
+    ...translations.en,
+    ...translations[language],
+  } as HomeCopy;
   const heroChips =
     language === "en"
       ? ["AI sourcing", "Prompt-to-query rules", "Screening preview"]
