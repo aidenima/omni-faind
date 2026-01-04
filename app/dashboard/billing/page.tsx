@@ -574,12 +574,16 @@ export default function BillingPage() {
                   {discountedSummary?.price ?? "—"}
                 </span>
               </div>
-              {appliedCoupon && discountedSummary?.discountPrice && (
-                <div className="flex items-center justify-between text-emerald-300">
-                  <span>{t.coupon} ({appliedCoupon.code})</span>
-                  <span className="font-semibold">{discountedSummary.discountPrice}</span>
-                </div>
-              )}
+              {appliedCoupon &&
+                discountedSummary &&
+                "discountPrice" in discountedSummary && (
+                  <div className="flex items-center justify-between text-emerald-300">
+                    <span>{t.coupon} ({appliedCoupon.code})</span>
+                    <span className="font-semibold">
+                      {discountedSummary.discountPrice}
+                    </span>
+                  </div>
+                )}
               <div className="flex items-center justify-between text-lg font-semibold text-slate-50 pt-2 border-t border-slate-800">
                 <span>{t.total}</span>
                 <span>{discountedSummary?.totalPrice ?? "—"}</span>
