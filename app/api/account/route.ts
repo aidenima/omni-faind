@@ -2,7 +2,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireUserId } from "@/app/api/projects/utils";
-import type { SubscriptionPlan } from "@prisma/client";
 import {
   getPlanContactLimit,
   type SubscriptionPlanId,
@@ -34,7 +33,7 @@ export async function GET() {
     return NextResponse.json({
       account: {
         id: account.id,
-        subscriptionPlan: account.subscriptionPlan as SubscriptionPlan,
+        subscriptionPlan: account.subscriptionPlan as SubscriptionPlanId,
         creditsRemaining,
         trialEndsAt: account.trialEndsAt?.toISOString() ?? null,
         contactLimit: getPlanContactLimit(
