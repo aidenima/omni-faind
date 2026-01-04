@@ -1,4 +1,4 @@
-import type { NextAuthOptions } from "next-auth";
+import type { NextAuthConfig } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { compare } from "bcryptjs";
@@ -14,7 +14,7 @@ declare const EdgeRuntime: string | undefined;
 const googleClientId = process.env.GOOGLE_CLIENT_ID ?? "";
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET ?? "";
 
-const authProviders: NextAuthOptions["providers"] = [];
+const authProviders: NextAuthConfig["providers"] = [];
 
 if (googleClientId && googleClientSecret) {
   authProviders.push(
@@ -29,7 +29,7 @@ if (googleClientId && googleClientSecret) {
   );
 }
 
-export const authOptions: NextAuthOptions = {
+export const authOptions: NextAuthConfig = {
   session: {
     strategy: "jwt",
   },
