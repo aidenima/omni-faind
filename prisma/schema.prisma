@@ -1,0 +1,112 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DATABASE_DIRECT_URL")
+}
+
+enum SubscriptionPlan {
+  STARTER
+  PRO
+  AGENCY
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String?
+  image        String?
+  passwordHash String?
+  authProvider String   @default("credentials")
+  subscriptionPlan SubscriptionPlan @default(STARTER)
+  creditsRemaining Decimal @default(15.0) @db.Decimal(10, 2)
+  trialEndsAt      DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  projects     Project[]
+  searches     SearchHistory[]
+  screenings   ScreeningHistory[]
+  sessions     UserSession[]
+}
+
+model Project {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  description String   @default("")
+  slug        String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, slug])
+  @@index([userId])
+  searches SearchHistory[]
+  screenings ScreeningHistory[]
+}
+
+model SearchHistory {
+  id          String   @id @default(uuid())
+  userId      String
+  projectId   String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  prompt      String
+  queries     Json?
+  resultCount Int?
+  results     Json?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([projectId])
+}
+
+model ScreeningHistory {
+  id             String   @id @default(uuid())
+  userId         String
+  projectId      String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  jobTitle       String?
+  jobDescription String
+  candidateCount Int?
+  resultCount    Int?
+  results        Json?
+  createdAt      DateTime @default(now())
+
+  @@index([userId])
+  @@index([projectId])
+}
+
+model Coupon {
+  id             String   @id @default(uuid())
+  code           String   @unique
+  userId         String
+  discountType   String   // "percent" | "fixed"
+  amount         Decimal
+  currency       String?
+  expiresAt      DateTime?
+  createdAt      DateTime @default(now())
+}
+
+model UserSession {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash   String   @unique
+  deviceId    String?
+  deviceName  String?  @default("This device")
+  userAgent   String?
+  ipAddress   String?
+  expiresAt   DateTime
+  lastUsedAt  DateTime @default(now())
+  revokedAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId, revokedAt, expiresAt])
+  @@index([userId, deviceId])
+}

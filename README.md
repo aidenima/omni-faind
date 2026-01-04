@@ -20,6 +20,37 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Database (PostgreSQL)
+
+OmniFAIND now runs on PostgreSQL via Prisma. To initialise a new environment:
+
+1. Create a PostgreSQL database (local `postgres` install, Docker, or a hosted option such as Neon/Supabase) and grab its connection string.
+2. Set `DATABASE_URL` inside `.env.local`, for example  
+   `DATABASE_URL="postgresql://postgres:postgres@localhost:5432/omnifaind?schema=public"`.
+3. Apply the Prisma migrations to create the schema:  
+   `pnpm prisma migrate dev --name init-postgres`
+4. Regenerate the Prisma client (usually done automatically by the previous step):  
+   `pnpm prisma generate`
+5. Inspect or edit users with Prisma Studio when needed:  
+   `pnpm prisma studio`
+
+### Migrating existing SQLite users (optional)
+
+If you still have `prisma/dev.db` with earlier accounts, you can move them manually:
+
+1. Export the SQLite data:  
+   `sqlite3 prisma/dev.db "SELECT id,email,name,authProvider,createdAt,updatedAt FROM User;" > tmp-users.csv`
+2. Import the rows into Postgres using your preferred tool (e.g. `psql`, pgAdmin, or a CSV import) targeting the same columns.
+3. Once you confirm the data is in Postgres, delete/ignore the old SQLite file.
+
+After the migration, start the app with `pnpm dev` and authentication will read/write directly from PostgreSQL.
+
+## Session security
+
+- Authentication issues device-scoped session tokens backed by the `UserSession` table. Each account keeps up to 3 active devices; the oldest is revoked automatically when a new login exceeds the limit.
+- Run the migration to add the table: `pnpm prisma migrate dev --name add-user-sessions` (regenerates Prisma client).
+- After deploying, users should re-login to obtain a device session token.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
@@ -29,8 +60,25 @@ To learn more about Next.js, take a look at the following resources:
 
 You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
-## Deploy on Vercel
+## PDF parsing support
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+The screening workspace relies on a lightweight Python helper to read PDF CVs via **PyPDF2**.  
+Before running the app locally, make sure you have Python 3 installed and then:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+pip install -r requirements.txt
+```
+
+If `python` is not available on your PATH, set the `PYTHON_BIN` environment variable to the appropriate executable before starting the Next.js dev server. This allows `/api/parse-cv` to invoke `scripts/extract_cv.py` for more reliable PDF text extraction.
+
+## AI-powered sourcing queries
+
+The sourcing workspace now delegates query generation to OpenAI GPT-4.1 Mini via `/api/generate-search-query`.  
+Set the `OPENAI_API_KEY` environment variable before running the app so the API route can call the model:
+
+```bash
+export OPENAI_API_KEY=sk-your-key-here
+pnpm dev
+```
+
+The model receives the sourcing rules (site filter, OR-expansions, mandatory negative filters) and returns only the final Google query string that the UI renders and opens in a new tab.
