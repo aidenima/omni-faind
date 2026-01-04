@@ -209,11 +209,19 @@ export const authOptions: NextAuthConfig = {
           );
 
           if (!isValid) {
-            return null;
+            return {
+              ...session,
+              user: undefined,
+              deviceSessionToken: undefined,
+            };
           }
         } catch (error) {
           console.error("[auth] Failed to validate user session", error);
-          return null;
+          return {
+            ...session,
+            user: undefined,
+            deviceSessionToken: undefined,
+          };
         }
       }
 
