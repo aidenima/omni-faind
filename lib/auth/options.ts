@@ -68,6 +68,11 @@ export const authOptions: NextAuthConfig = {
           name: user.name ?? undefined,
           email: user.email,
           image: user.image ?? undefined,
+          subscriptionPlan: user.subscriptionPlan,
+          creditsRemaining: Number(user.creditsRemaining),
+          trialEndsAt: user.trialEndsAt
+            ? user.trialEndsAt.toISOString()
+            : null,
         };
       },
     }),
