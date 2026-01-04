@@ -227,8 +227,8 @@ export const authOptions: NextAuthConfig = {
 
       if (session.user) {
         session.user.id = token.id as string;
-        session.user.name = token.name;
-        session.user.email = token.email;
+        session.user.name = token.name ?? session.user.name ?? undefined;
+        session.user.email = token.email ?? session.user.email ?? "";
         session.user.subscriptionPlan =
           (token.subscriptionPlan as string) ?? DEFAULT_SUBSCRIPTION_PLAN;
         session.user.creditsRemaining =
