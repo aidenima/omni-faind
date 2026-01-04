@@ -6,7 +6,7 @@ import { auth } from "@/auth";
 export default async function SignupPage() {
   const session = await auth();
 
-  if (session) {
+  if (session?.user?.id) {
     redirect("/dashboard");
   }
 
