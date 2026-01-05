@@ -13,6 +13,7 @@ declare const EdgeRuntime: string | undefined;
 
 const googleClientId = process.env.GOOGLE_CLIENT_ID ?? "";
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET ?? "";
+const authSecret = process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET ?? "";
 
 const authProviders: NextAuthConfig["providers"] = [];
 
@@ -30,6 +31,9 @@ if (googleClientId && googleClientSecret) {
 }
 
 export const authOptions: NextAuthConfig = {
+  // Accept incoming host headers (behind proxy) and use explicit secret for signing
+  trustHost: true,
+  ...(authSecret ? { secret: authSecret } : {}),
   session: {
     strategy: "jwt",
   },
