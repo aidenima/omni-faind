@@ -36,15 +36,29 @@ export const SignupForm = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [googleEnabled, setGoogleEnabled] = useState(false);
+  const [googleError, setGoogleError] = useState<string | null>(null);
   const [formLanguage, setFormLanguage] = useState<"en" | "sr">("en");
 
   useEffect(() => {
     let mounted = true;
-    getProviders().then((providers) => {
-      if (mounted) {
-        setGoogleEnabled(Boolean(providers?.google));
-      }
-    });
+    getProviders()
+      .then((providers) => {
+        if (mounted) {
+          setGoogleEnabled(Boolean(providers?.google));
+          if (!providers?.google) {
+            setGoogleError(
+              "Google sign-up is unavailable. Check OAuth credentials."
+            );
+          }
+        }
+      })
+      .catch(() => {
+        if (mounted) {
+          setGoogleError(
+            "Google sign-up is unavailable. Check OAuth credentials."
+          );
+        }
+      });
     return () => {
       mounted = false;
     };
@@ -178,6 +192,7 @@ export const SignupForm = () => {
             type="button"
             onClick={handleGoogleSignIn}
             className="inline-flex w-full items-center justify-center gap-3 rounded-xl border border-slate-700 bg-slate-950/70 px-4 py-3 text-sm font-medium text-slate-50 transition hover:border-sky-500 hover:text-sky-100"
+            aria-disabled={!googleEnabled}
           >
             <Image
               src="/google-logo.svg"
@@ -195,6 +210,12 @@ export const SignupForm = () => {
             <span>or create with email</span>
             <span className="h-px flex-1 bg-slate-800" />
           </div>
+
+          {googleError && (
+            <p className="text-xs text-amber-400" role="alert">
+              {googleError}
+            </p>
+          )}
         </>
       )}
 
