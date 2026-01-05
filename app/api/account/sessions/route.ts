@@ -23,8 +23,10 @@ export async function GET() {
     },
   });
 
+  type Session = (typeof sessions)[number];
+
   return NextResponse.json({
-    sessions: sessions.map((session) => ({
+    sessions: sessions.map((session: Session) => ({
       ...session,
       createdAt: session.createdAt.toISOString(),
       lastUsedAt: session.lastUsedAt.toISOString(),
