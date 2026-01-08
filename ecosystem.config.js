@@ -4,7 +4,7 @@ module.exports = {
       name: "omnifaind",
       script: "node_modules/next/dist/bin/next",
       args: "start",
-      cwd: "/var/www/omnifaind",
+      cwd: "/var/www/html/omni-faind",
       instances: 1,
       exec_mode: "fork",
       env: {
