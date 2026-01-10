@@ -2,9 +2,10 @@ module.exports = {
   apps: [
     {
       name: "omnifaind",
-      script: "node_modules/next/dist/bin/next",
+      script: "/var/www/omni-faind/node_modules/.bin/next",
       args: "start",
-      cwd: "/var/www/html/omni-faind",
+      cwd: "/var/www/omni-faind",
+      interpreter: "node",
       instances: 1,
       exec_mode: "fork",
       env: {
