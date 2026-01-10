@@ -7,6 +7,9 @@ import {
   getPlanContactLimit,
   type SubscriptionPlanId,
 } from "@/lib/billing/plans";
+import { buildRateLimitHeaders, checkRateLimit } from "@/lib/rate-limit";
+import { logApiRequest } from "@/lib/request-logger";
+import { getClientIp } from "@/lib/request-utils";
 
 const GOOGLE_SEARCH_URL =
   "https://customsearch.googleapis.com/customsearch/v1";
@@ -373,10 +376,35 @@ const executeCustomSearch = async (
 };
 
 export async function POST(request: NextRequest) {
+  const startedAt = Date.now();
+  let statusCode = 500;
+  let userId: string | null = null;
+  const respond = (
+    payload: unknown,
+    status: number,
+    init?: ResponseInit
+  ) => {
+    statusCode = status;
+    return NextResponse.json(payload, { status, ...init });
+  };
+
   try {
-    const userId = await requireUserId();
+    userId = await requireUserId();
     if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return respond({ error: "Unauthorized" }, 401);
+    }
+
+    const rateLimit = checkRateLimit(
+      `search:${userId}:${getClientIp(request)}`,
+      10,
+      60_000
+    );
+    if (!rateLimit.allowed) {
+      return respond(
+        { error: "Too many requests. Please try again shortly." },
+        429,
+        { headers: buildRateLimitHeaders(rateLimit) }
+      );
     }
 
     const body = (await request.json()) as {
@@ -388,10 +416,7 @@ export async function POST(request: NextRequest) {
     const { query, city, prompt } = body;
 
     if (!query || typeof query !== "string" || !query.trim()) {
-      return NextResponse.json(
-        { error: "Query is required." },
-        { status: 400 }
-      );
+      return respond({ error: "Query is required." }, 400);
     }
 
     const account = await prisma.user.findUnique({
@@ -400,22 +425,19 @@ export async function POST(request: NextRequest) {
     });
 
     if (!account) {
-      return NextResponse.json(
-        { error: "Account not found." },
-        { status: 404 }
-      );
+      return respond({ error: "Account not found." }, 404);
     }
 
     const planId = account.subscriptionPlan as SubscriptionPlanId;
     const accountCredits = Number(account.creditsRemaining);
     if (accountCredits < CREDITS_PER_SEARCH) {
-      return NextResponse.json(
+      return respond(
         {
           error:
             "You are out of credits. Buy credits or upgrade your plan to continue searching.",
           creditsRemaining: accountCredits,
         },
-        { status: 402 }
+        402
       );
     }
     const contactLimit = Math.min(
@@ -427,9 +449,9 @@ export async function POST(request: NextRequest) {
     const searchEngineId = process.env.GOOGLE_CSE_ID;
 
     if (!apiKey || !searchEngineId) {
-      return NextResponse.json(
+      return respond(
         { error: "Missing GOOGLE_API_KEY or GOOGLE_CSE_ID." },
-        { status: 503 }
+        503
       );
     }
 
@@ -548,13 +570,13 @@ export async function POST(request: NextRequest) {
     });
 
     if (!finalResults.length) {
-      return NextResponse.json(
+      return respond(
         {
           error:
             "Search provider temporarily unavailable. Please try again shortly.",
           details: debugErrors ? sourceErrorDetails : undefined,
         },
-        { status: 503 }
+        503
       );
     }
 
@@ -573,26 +595,37 @@ export async function POST(request: NextRequest) {
         where: { id: userId },
         select: { creditsRemaining: true },
       });
-      return NextResponse.json(
+      return respond(
         {
           error:
             "You are out of credits. Buy credits or upgrade your plan to continue searching.",
           creditsRemaining: latest ? Number(latest.creditsRemaining) : 0,
         },
-        { status: 402 }
+        402
       );
     }
 
-    return NextResponse.json({
+    return respond(
+      {
       results: finalResults,
       queries: queryPayload,
       warnings: sourceErrors.length ? sourceErrors : undefined,
-    });
+      },
+      200
+    );
   } catch (error) {
     console.error("Failed to fetch Google search results", error);
-    return NextResponse.json(
+    return respond(
       { error: "Unexpected server error during Google search." },
-      { status: 500 }
+      500
     );
+  } finally {
+    logApiRequest({
+      request,
+      route: "search",
+      status: statusCode,
+      durationMs: Date.now() - startedAt,
+      userId,
+    });
   }
 }

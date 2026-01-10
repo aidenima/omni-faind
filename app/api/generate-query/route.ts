@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireUserId } from "@/app/api/projects/utils";
+import { buildRateLimitHeaders, checkRateLimit } from "@/lib/rate-limit";
+import { logApiRequest } from "@/lib/request-logger";
+import { getClientIp } from "@/lib/request-utils";
 
 type AiCompletionResponse = {
   choices?: {
@@ -50,21 +54,45 @@ const ensureLinkedInFilter = (query: string) => {
 };
 
 export async function POST(request: NextRequest) {
+  const startedAt = Date.now();
+  let statusCode = 500;
+  let userId: string | null = null;
+  const respond = (
+    payload: unknown,
+    status: number,
+    init?: ResponseInit
+  ) => {
+    statusCode = status;
+    return NextResponse.json(payload, { status, ...init });
+  };
+
   try {
+    userId = await requireUserId();
+    if (!userId) {
+      return respond({ error: "Unauthorized." }, 401);
+    }
+
+    const rateLimit = checkRateLimit(
+      `generate-query:${userId}:${getClientIp(request)}`,
+      10,
+      60_000
+    );
+    if (!rateLimit.allowed) {
+      return respond(
+        { error: "Too many requests. Please try again shortly." },
+        429,
+        { headers: buildRateLimitHeaders(rateLimit) }
+      );
+    }
+
     const { prompt } = (await request.json()) as { prompt?: string };
     if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
-      return NextResponse.json(
-        { error: "Prompt is required." },
-        { status: 400 }
-      );
+      return respond({ error: "Prompt is required." }, 400);
     }
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      return NextResponse.json(
-        { error: "Missing OPENAI_API_KEY in environment." },
-        { status: 503 }
-      );
+      return respond({ error: "Missing OPENAI_API_KEY in environment." }, 503);
     }
 
     const response = await fetch(OPENAI_COMPLETIONS_URL, {
@@ -85,9 +113,9 @@ export async function POST(request: NextRequest) {
 
     if (!response.ok) {
       const errorPayload = await response.json().catch(() => null);
-      return NextResponse.json(
+      return respond(
         { error: errorPayload?.error || "OpenAI request failed." },
-        { status: response.status }
+        response.status
       );
     }
 
@@ -95,26 +123,31 @@ export async function POST(request: NextRequest) {
     const aiMessage = data.choices?.[0]?.message?.content?.trim();
 
     if (!aiMessage) {
-      return NextResponse.json(
-        { error: "AI response is empty." },
-        { status: 502 }
-      );
+      return respond({ error: "AI response is empty." }, 502);
     }
 
     const aiQuery = extractQueryFromAi(aiMessage);
     if (!aiQuery) {
-      return NextResponse.json(
+      return respond(
         { error: "AI response does not include a valid query." },
-        { status: 422 }
+        422
       );
     }
 
-    return NextResponse.json({ query: ensureLinkedInFilter(aiQuery) });
+    return respond({ query: ensureLinkedInFilter(aiQuery) }, 200);
   } catch (error) {
     console.error("AI query generation failed", error);
-    return NextResponse.json(
+    return respond(
       { error: "Unexpected server error while generating query." },
-      { status: 500 }
+      500
     );
+  } finally {
+    logApiRequest({
+      request,
+      route: "generate-query",
+      status: statusCode,
+      durationMs: Date.now() - startedAt,
+      userId,
+    });
   }
 }

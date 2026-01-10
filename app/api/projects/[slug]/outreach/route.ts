@@ -4,6 +4,9 @@ import {
   requireUserId,
 } from "@/app/api/projects/utils";
 import { prisma } from "@/lib/prisma";
+import { buildRateLimitHeaders, checkRateLimit } from "@/lib/rate-limit";
+import { logApiRequest } from "@/lib/request-logger";
+import { getClientIp } from "@/lib/request-utils";
 
 type OutreachChannel = "linkedin" | "upwork" | "github";
 type OutreachLanguage =
@@ -318,16 +321,41 @@ const resolveSlugParam = async (contextParams: RouteContext["params"]) => {
 };
 
 export async function POST(request: NextRequest, context: RouteContext) {
+  const startedAt = Date.now();
+  let statusCode = 500;
+  let userId: string | null = null;
+  const respond = (
+    payload: unknown,
+    status: number,
+    init?: ResponseInit
+  ) => {
+    statusCode = status;
+    return NextResponse.json(payload, { status, ...init });
+  };
+
   try {
     const slug = await resolveSlugParam(context.params);
-    const userId = await requireUserId();
+    userId = await requireUserId();
     if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return respond({ error: "Unauthorized" }, 401);
+    }
+
+    const rateLimit = checkRateLimit(
+      `outreach:${userId}:${getClientIp(request)}`,
+      6,
+      60_000
+    );
+    if (!rateLimit.allowed) {
+      return respond(
+        { error: "Too many requests. Please try again shortly." },
+        429,
+        { headers: buildRateLimitHeaders(rateLimit) }
+      );
     }
 
     const project = await findProjectBySlug(userId, slug);
     if (!project) {
-      return NextResponse.json({ error: "Project not found." }, { status: 404 });
+      return respond({ error: "Project not found." }, 404);
     }
 
     const account = await prisma.user.findUnique({
@@ -336,36 +364,36 @@ export async function POST(request: NextRequest, context: RouteContext) {
     });
 
     if (!account) {
-      return NextResponse.json({ error: "Account not found." }, { status: 404 });
+      return respond({ error: "Account not found." }, 404);
     }
 
     const accountCredits = Number(account.creditsRemaining);
 
     if (accountCredits < OUTREACH_CREDIT_COST) {
-      return NextResponse.json(
+      return respond(
         {
           error:
             "You are out of credits. Buy credits or upgrade your plan to continue generating outreach.",
           creditsRemaining: accountCredits,
         },
-        { status: 402 }
+        402
       );
     }
 
     const payload = await request.json().catch(() => null);
     const channel = sanitizeChannel(payload?.channel);
     if (!channel) {
-      return NextResponse.json(
+      return respond(
         { error: "A valid outreach channel is required." },
-        { status: 400 }
+        400
       );
     }
 
     const candidate = sanitizeCandidate(payload?.candidate);
     if (!candidate) {
-      return NextResponse.json(
+      return respond(
         { error: "Candidate name and profile URL are required." },
-        { status: 400 }
+        400
       );
     }
 
@@ -373,10 +401,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      return NextResponse.json(
-        { error: "Missing OPENAI_API_KEY." },
-        { status: 503 }
-      );
+      return respond({ error: "Missing OPENAI_API_KEY." }, 503);
     }
 
     const systemPrompt = `You are OmniFAIND's outreach assistant. Craft concise, personalized cold messages based on the provided project and lead context. Always follow the rules exactly and keep the tone confident yet respectful.`;
@@ -407,13 +432,13 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     if (!response.ok) {
       const errorPayload = await response.json().catch(() => null);
-      return NextResponse.json(
+      return respond(
         {
           error:
             errorPayload?.error?.message ||
             "OpenAI request failed while generating outreach.",
         },
-        { status: response.status }
+        response.status
       );
     }
 
@@ -426,9 +451,9 @@ export async function POST(request: NextRequest, context: RouteContext) {
         ?.text || null;
 
     if (!aiText) {
-      return NextResponse.json(
+      return respond(
         { error: "AI response did not contain outreach text." },
-        { status: 502 }
+        502
       );
     }
 
@@ -447,13 +472,13 @@ export async function POST(request: NextRequest, context: RouteContext) {
         where: { id: userId },
         select: { creditsRemaining: true },
       });
-      return NextResponse.json(
+      return respond(
         {
           error:
             "You are out of credits. Buy credits or upgrade your plan to continue generating outreach.",
           creditsRemaining: latest ? Number(latest.creditsRemaining) : 0,
         },
-        { status: 402 }
+        402
       );
     }
 
@@ -462,17 +487,28 @@ export async function POST(request: NextRequest, context: RouteContext) {
       select: { creditsRemaining: true },
     });
 
-    return NextResponse.json({
+    return respond(
+      {
       message: aiText.trim(),
       creditsRemaining: updatedCredits
         ? Number(updatedCredits.creditsRemaining)
         : 0,
-    });
+      },
+      200
+    );
   } catch (error) {
     console.error("Failed to generate outreach message", error);
-    return NextResponse.json(
+    return respond(
       { error: "Unexpected error while generating outreach." },
-      { status: 500 }
+      500
     );
+  } finally {
+    logApiRequest({
+      request,
+      route: "outreach",
+      status: statusCode,
+      durationMs: Date.now() - startedAt,
+      userId,
+    });
   }
 }

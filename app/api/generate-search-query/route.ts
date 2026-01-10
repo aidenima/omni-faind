@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireUserId } from "@/app/api/projects/utils";
+import { buildRateLimitHeaders, checkRateLimit } from "@/lib/rate-limit";
+import { logApiRequest } from "@/lib/request-logger";
+import { getClientIp } from "@/lib/request-utils";
 
 const MODEL = "gpt-4.1-mini";
 const CREDITS_PER_SEARCH = 1;
@@ -50,17 +53,19 @@ Pravila:
 3. Svaka OR grupa mora biti u zagradama.
 4. Vrati samo finalni query bez dodatnog teksta ili objasnjenja.`;
 
-const insufficientCreditsResponse = (creditsRemaining: number) =>
-  NextResponse.json(
-    {
-      error:
-        "You are out of credits. Buy credits or upgrade your plan to continue searching.",
-      creditsRemaining,
-    },
-    { status: 402 }
-  );
-
 export async function POST(request: NextRequest) {
+  const startedAt = Date.now();
+  let statusCode = 500;
+  let userId: string | null = null;
+  const respond = (
+    payload: unknown,
+    status: number,
+    init?: ResponseInit
+  ) => {
+    statusCode = status;
+    return NextResponse.json(payload, { status, ...init });
+  };
+
   try {
     const { prompt, platform } = (await request.json()) as {
       prompt?: string;
@@ -68,10 +73,7 @@ export async function POST(request: NextRequest) {
     };
 
     if (!prompt || !prompt.trim()) {
-      return NextResponse.json(
-        { error: "Prompt is required." },
-        { status: 400 }
-      );
+      return respond({ error: "Prompt is required." }, 400);
     }
     const normalizedPlatform =
       typeof platform === "string" ? platform.trim().toLowerCase() : "linkedin";
@@ -82,9 +84,22 @@ export async function POST(request: NextRequest) {
         ? GITHUB_SYSTEM_PROMPT
         : LINKEDIN_SYSTEM_PROMPT;
 
-    const userId = await requireUserId();
+    userId = await requireUserId();
     if (!userId) {
-      return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+      return respond({ error: "Unauthorized." }, 401);
+    }
+
+    const rateLimit = checkRateLimit(
+      `generate-search-query:${userId}:${getClientIp(request)}`,
+      10,
+      60_000
+    );
+    if (!rateLimit.allowed) {
+      return respond(
+        { error: "Too many requests. Please try again shortly." },
+        429,
+        { headers: buildRateLimitHeaders(rateLimit) }
+      );
     }
 
     const account = await prisma.user.findUnique({
@@ -93,24 +108,25 @@ export async function POST(request: NextRequest) {
     });
 
     if (!account) {
-      return NextResponse.json(
-        { error: "Account not found." },
-        { status: 404 }
-      );
+      return respond({ error: "Account not found." }, 404);
     }
 
     const accountCredits = Number(account.creditsRemaining);
 
     if (accountCredits < CREDITS_PER_SEARCH) {
-      return insufficientCreditsResponse(accountCredits);
+      return respond(
+        {
+          error:
+            "You are out of credits. Buy credits or upgrade your plan to continue searching.",
+          creditsRemaining: accountCredits,
+        },
+        402
+      );
     }
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      return NextResponse.json(
-        { error: "Missing OPENAI_API_KEY." },
-        { status: 503 }
-      );
+      return respond({ error: "Missing OPENAI_API_KEY." }, 503);
     }
 
     const response = await fetchWithTimeout("https://api.openai.com/v1/responses", {
@@ -132,13 +148,13 @@ export async function POST(request: NextRequest) {
 
     if (!response.ok) {
       const errorPayload = await response.json().catch(() => null);
-      return NextResponse.json(
+      return respond(
         {
           error:
             errorPayload?.error?.message ||
             "OpenAI request failed while generating query.",
         },
-        { status: response.status }
+        response.status
       );
     }
 
@@ -151,29 +167,61 @@ export async function POST(request: NextRequest) {
         ?.text || null;
 
     if (!aiText) {
-      return NextResponse.json(
+      return respond(
         { error: "OpenAI response did not contain query text." },
-        { status: 502 }
+        502
       );
     }
 
     const query = aiText.trim();
     if (!query.toLowerCase().startsWith("site:")) {
-      return NextResponse.json(
+      return respond(
         { error: "Generated query did not follow the required format." },
-        { status: 502 }
+        502
       );
     }
 
-    return NextResponse.json({
-      query,
-      creditsRemaining: accountCredits,
+    const deduction = await prisma.user.updateMany({
+      where: {
+        id: userId,
+        creditsRemaining: { gte: CREDITS_PER_SEARCH },
+      },
+      data: {
+        creditsRemaining: { decrement: CREDITS_PER_SEARCH },
+      },
     });
+    if (deduction.count === 0) {
+      const latest = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { creditsRemaining: true },
+      });
+      return respond(
+        {
+          error:
+            "You are out of credits. Buy credits or upgrade your plan to continue searching.",
+          creditsRemaining: latest ? Number(latest.creditsRemaining) : 0,
+        },
+        402
+      );
+    }
+
+    return respond(
+      {
+      query,
+      creditsRemaining: accountCredits - CREDITS_PER_SEARCH,
+      },
+      200
+    );
   } catch (error) {
     console.error("Failed to generate AI query", error);
-    return NextResponse.json(
-      { error: "Unexpected error while generating AI query." },
-      { status: 500 }
-    );
+    return respond({ error: "Unexpected error while generating AI query." }, 500);
+  } finally {
+    logApiRequest({
+      request,
+      route: "generate-search-query",
+      status: statusCode,
+      durationMs: Date.now() - startedAt,
+      userId,
+    });
   }
 }

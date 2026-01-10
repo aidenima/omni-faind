@@ -6,6 +6,9 @@ import {
   normalizeSubscriptionPlan,
 } from "@/lib/billing/plans";
 import { findProjectBySlug, requireUserId } from "@/app/api/projects/utils";
+import { buildRateLimitHeaders, checkRateLimit } from "@/lib/rate-limit";
+import { logApiRequest } from "@/lib/request-logger";
+import { getClientIp } from "@/lib/request-utils";
 
 const CREDITS_PER_CV = 0.2;
 const MAX_JOB_DESCRIPTION_LENGTH = 6000;
@@ -45,16 +48,6 @@ const resolveSlugParam = async (contextParams: RouteContext["params"]) => {
   }
   return contextParams.slug;
 };
-
-const insufficientCreditsResponse = (creditsRemaining: number) =>
-  NextResponse.json(
-    {
-      error:
-        "Not enough credits for screening. Remove candidates or buy additional credits.",
-      creditsRemaining,
-    },
-    { status: 402 }
-  );
 
 const sanitizeJobDescription = (value: unknown) => {
   if (typeof value !== "string") return null;
@@ -346,25 +339,50 @@ const mergeAiResults = (
 };
 
 export async function POST(request: NextRequest, context: RouteContext) {
+  const startedAt = Date.now();
+  let statusCode = 500;
+  let userId: string | null = null;
+  const respond = (
+    payload: unknown,
+    status: number,
+    init?: ResponseInit
+  ) => {
+    statusCode = status;
+    return NextResponse.json(payload, { status, ...init });
+  };
+
   try {
     const slug = await resolveSlugParam(context.params);
-    const userId = await requireUserId();
+    userId = await requireUserId();
     if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return respond({ error: "Unauthorized" }, 401);
+    }
+
+    const rateLimit = checkRateLimit(
+      `screening:${userId}:${getClientIp(request)}`,
+      3,
+      60_000
+    );
+    if (!rateLimit.allowed) {
+      return respond(
+        { error: "Too many requests. Please try again shortly." },
+        429,
+        { headers: buildRateLimitHeaders(rateLimit) }
+      );
     }
 
     const project = await findProjectBySlug(userId, slug);
     if (!project) {
-      return NextResponse.json({ error: "Project not found." }, { status: 404 });
+      return respond({ error: "Project not found." }, 404);
     }
 
     const payload = await request.json().catch(() => null);
     const jobDescription = sanitizeJobDescription(payload?.jobDescription);
 
     if (!jobDescription) {
-      return NextResponse.json(
+      return respond(
         { error: "Job description is required for screening." },
-        { status: 400 }
+        400
       );
     }
 
@@ -374,7 +392,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     });
 
     if (!account) {
-      return NextResponse.json({ error: "Account not found." }, { status: 404 });
+      return respond({ error: "Account not found." }, 404);
     }
 
     const planId =
@@ -387,11 +405,11 @@ export async function POST(request: NextRequest, context: RouteContext) {
     );
 
     if (!candidateList) {
-      return NextResponse.json(
+      return respond(
         {
           error: `Provide between 1 and ${maxCandidates} candidates, each with an id and CV text.`,
         },
-        { status: 400 }
+        400
       );
     }
 
@@ -402,15 +420,19 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     const accountCredits = Number(account.creditsRemaining);
     if (accountCredits + 1e-6 < creditsNeeded) {
-      return insufficientCreditsResponse(accountCredits);
+      return respond(
+        {
+          error:
+            "Not enough credits for screening. Remove candidates or buy additional credits.",
+          creditsRemaining: accountCredits,
+        },
+        402
+      );
     }
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      return NextResponse.json(
-        { error: "Missing OPENAI_API_KEY." },
-        { status: 503 }
-      );
+      return respond({ error: "Missing OPENAI_API_KEY." }, 503);
     }
 
     const aiResponse = await fetch("https://api.openai.com/v1/responses", {
@@ -424,13 +446,13 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     if (!aiResponse.ok) {
       const errorPayload = await aiResponse.json().catch(() => null);
-      return NextResponse.json(
+      return respond(
         {
           error:
             errorPayload?.error?.message ||
             "AI service failed while analyzing candidates.",
         },
-        { status: aiResponse.status }
+        aiResponse.status
       );
     }
 
@@ -456,8 +478,13 @@ export async function POST(request: NextRequest, context: RouteContext) {
         where: { id: userId },
         select: { creditsRemaining: true },
       });
-      return insufficientCreditsResponse(
-        latest ? Number(latest.creditsRemaining) : 0
+      return respond(
+        {
+          error:
+            "Not enough credits for screening. Remove candidates or buy additional credits.",
+          creditsRemaining: latest ? Number(latest.creditsRemaining) : 0,
+        },
+        402
       );
     }
 
@@ -468,22 +495,33 @@ export async function POST(request: NextRequest, context: RouteContext) {
       select: { creditsRemaining: true },
     });
 
-    return NextResponse.json({
+    return respond(
+      {
       results: mergedResults,
       creditsRemaining: updatedCredits
         ? Number(updatedCredits.creditsRemaining)
         : 0,
-    });
+      },
+      200
+    );
   } catch (error) {
     console.error("Failed to analyze candidates", error);
-    return NextResponse.json(
+    return respond(
       {
         error:
           error instanceof Error
             ? error.message
             : "Unexpected error while analyzing candidates.",
       },
-      { status: 500 }
+      500
     );
+  } finally {
+    logApiRequest({
+      request,
+      route: "screening",
+      status: statusCode,
+      durationMs: Date.now() - startedAt,
+      userId,
+    });
   }
 }

@@ -3,6 +3,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { requireUserId } from "@/app/api/projects/utils";
+import { buildRateLimitHeaders, checkRateLimit } from "@/lib/rate-limit";
+import { logApiRequest } from "@/lib/request-logger";
+import { getClientIp } from "@/lib/request-utils";
 
 const SCRIPT_PATH = path.join(process.cwd(), "scripts", "extract_cv.py");
 const PYTHON_BIN = process.env.PYTHON_BIN || "python";
@@ -51,15 +55,42 @@ const runPythonParser = (filePath: string) =>
   });
 
 export async function POST(request: NextRequest) {
+  const startedAt = Date.now();
+  let statusCode = 500;
+  let userId: string | null = null;
+  const respond = (
+    payload: unknown,
+    status: number,
+    init?: ResponseInit
+  ) => {
+    statusCode = status;
+    return NextResponse.json(payload, { status, ...init });
+  };
+
   try {
+    userId = await requireUserId();
+    if (!userId) {
+      return respond({ error: "Unauthorized." }, 401);
+    }
+
+    const rateLimit = checkRateLimit(
+      `parse-cv:${userId}:${getClientIp(request)}`,
+      5,
+      60_000
+    );
+    if (!rateLimit.allowed) {
+      return respond(
+        { error: "Too many requests. Please try again shortly." },
+        429,
+        { headers: buildRateLimitHeaders(rateLimit) }
+      );
+    }
+
     const formData = await request.formData();
     const file = formData.get("file");
 
     if (!(file instanceof Blob)) {
-      return NextResponse.json(
-        { error: "Missing file payload." },
-        { status: 400 }
-      );
+      return respond({ error: "Missing file payload." }, 400);
     }
 
     const fileName =
@@ -78,20 +109,28 @@ export async function POST(request: NextRequest) {
       if (!payload.text) {
         throw new Error("PDF parsing returned empty text.");
       }
-      return NextResponse.json(payload);
+      return respond(payload, 200);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   } catch (error) {
     console.error("Failed to parse CV file", error);
-    return NextResponse.json(
+    return respond(
       {
         error:
           error instanceof Error
             ? error.message
             : "Unexpected error while parsing CV.",
       },
-      { status: 500 }
+      500
     );
+  } finally {
+    logApiRequest({
+      request,
+      route: "parse-cv",
+      status: statusCode,
+      durationMs: Date.now() - startedAt,
+      userId,
+    });
   }
 }
